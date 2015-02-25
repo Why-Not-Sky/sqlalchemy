@@ -337,7 +337,7 @@ class ResultMetaData(object):
         else:
             return self._key_fallback(key, False) is not None
 
-    def _getter(self, key):
+    def _index_of(self, key):
         if key in self._keymap:
             processor, obj, index = self._keymap[key]
         else:
@@ -351,6 +351,10 @@ class ResultMetaData(object):
                 "Ambiguous column name '%s' in result set! "
                 "try 'use_labels' option on select statement." % key)
 
+        return index
+
+    def _getter(self, key):
+        index = self._index_of(key)
         return operator.itemgetter(index)
 
     def __getstate__(self):
@@ -413,6 +417,9 @@ class ResultProxy(object):
         self._echo = self.connection._echo and \
             context.engine._should_log_debug()
         self._init_metadata()
+
+    def _index_of(self, key):
+        return self._metadata._index_of(key)
 
     def _getter(self, key):
         return self._metadata._getter(key)

@@ -42,6 +42,14 @@ def instances(query, cursor, context):
             def filter_fn(row):
                 return tuple(fn(x) for x, fn in zip(row, filter_fns))
 
+    if context.statement is not None:
+        context._setup_column_processors(
+            [
+                (cursor._index_of(col), col)
+                for col in context.primary_columns + context.secondary_columns
+            ]
+        )
+
     try:
         (labels, process) = list(zip(*context.loaders))
 

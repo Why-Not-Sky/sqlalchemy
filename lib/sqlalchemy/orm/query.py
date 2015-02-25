@@ -2935,15 +2935,15 @@ class Query(object):
     def _compile_context(self, labels=True):
         context = QueryContext(self)
 
-        if context.statement is not None:
-            return context
-
         context.labels = labels
 
         context._for_update_arg = self._for_update_arg
 
         for entity in self._entities:
             entity.setup_context(self, context)
+
+        if context.statement is not None:
+            return context
 
         for rec in context.create_eager_joins:
             strategy = rec[0]
@@ -3044,13 +3044,14 @@ class Query(object):
 
         statement.append_order_by(*context.eager_order_by)
 
-        for idx, col in enumerate(context.primary_columns, 0):
-            context.column_processors[col](idx)
-
-        for idx, col in enumerate(
+        context._setup_column_processors(
+            enumerate(context.primary_columns, 0)
+        )
+        context._setup_column_processors(
+            enumerate(
                 context.secondary_columns,
-                len(context.primary_columns) + len(order_by_col_expr)):
-            context.column_processors[col](idx)
+                len(context.primary_columns) + len(order_by_col_expr))
+        )
 
         return statement
 
@@ -3277,6 +3278,7 @@ class _MapperEntity(_QueryEntity):
 
         # TODO: this was part of concrete, how does this apply
         # now?  At least for textual, something is needed.
+        # (or do we?)
         # if not adapter and self.mapper._requires_row_aliasing:
         #    adapter = sql_util.ColumnAdapter(
         #        self.selectable,
@@ -3696,6 +3698,7 @@ class QueryContext(object):
     adapter = None
     froms = ()
     for_update = None
+    order_by = False
 
     def __init__(self, query):
 
@@ -3728,6 +3731,10 @@ class QueryContext(object):
                                      o.propagate_to_loaders)
         self.attributes = query._attributes.copy()
         self.loaders = []
+
+    def _setup_column_processors(self, cols):
+        for idx, col in cols:
+            self.column_processors[col](idx)
 
 
 class AliasOption(interfaces.MapperOption):
