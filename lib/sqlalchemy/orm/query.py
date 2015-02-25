@@ -3015,7 +3015,7 @@ class Query(object):
 
         equivs = self.__all_equivs()
 
-        context.adapter = sql_util.ColumnAdapter(inner, equivs)
+        outer_adapter = sql_util.ColumnAdapter(inner, equivs)
 
         statement = sql.select(
             [inner] + context.secondary_columns,
@@ -3036,12 +3036,21 @@ class Query(object):
 
         if context.order_by:
             statement.append_order_by(
-                *context.adapter.copy_and_process(
+                *outer_adapter.copy_and_process(
                     context.order_by
                 )
             )
 
         statement.append_order_by(*context.eager_order_by)
+
+        for idx, col in enumerate(context.primary_columns, 0):
+            context.column_processors[col](idx)
+
+        for idx, col in enumerate(
+                context.secondary_columns,
+                len(context.primary_columns) + len(order_by_col_expr)):
+            context.column_processors[col](idx)
+
         return statement
 
     def _simple_statement(self, context):
@@ -3078,6 +3087,13 @@ class Query(object):
 
         if context.eager_order_by:
             statement.append_order_by(*context.eager_order_by)
+
+        # initiate indexes for column processor functions
+        # that have been established
+        for idx, col in enumerate(
+                context.primary_columns + context.secondary_columns):
+            context.column_processors[col](idx)
+
         return statement
 
     def _adjust_for_single_inheritance(self, context):
@@ -3297,6 +3313,13 @@ class _MapperEntity(_QueryEntity):
     def setup_context(self, query, context):
         adapter = self._get_entity_clauses(query, context)
 
+        # TODO: this was part of concrete, how does this apply
+        # now?  At least for textual, something is needed.
+        # if not adapter and self.mapper._requires_row_aliasing:
+        #    adapter = sql_util.ColumnAdapter(
+        #        self.selectable,
+        #        self.mapper._equivalent_columns)
+
         # if self._adapted_selectable is None:
         context.froms += (self.selectable,)
 
@@ -3317,28 +3340,44 @@ class _MapperEntity(_QueryEntity):
         else:
             poly_properties = self.mapper._polymorphic_properties
 
-        for value in poly_properties:
-            if query._only_load_props and \
-                    value.key not in query._only_load_props:
-                continue
-            value.setup(
-                context,
-                self,
-                self.path,
-                adapter,
-                only_load_props=query._only_load_props,
-                column_collection=context.primary_columns
-            )
+        props_toload = [
+            prop for prop in poly_properties
+            if not query._only_load_props
+            or prop.key in query._only_load_props
+        ]
 
-        if self._polymorphic_discriminator is not None and \
-            self._polymorphic_discriminator \
-                is not self.mapper.polymorphic_on:
+        if query._primary_entity is self:
+            only_load_props = query._only_load_props
+            refresh_state = context.refresh_state
+        else:
+            only_load_props = refresh_state = None
 
-            if adapter:
-                pd = adapter.columns[self._polymorphic_discriminator]
-            else:
-                pd = self._polymorphic_discriminator
-            context.primary_columns.append(pd)
+        _instance = loading.instance_processor(
+            self.mapper,
+            props_toload,
+            context,
+            context.primary_columns,
+            self,
+            self.path,
+            adapter,
+            only_load_props=only_load_props,
+            refresh_state=refresh_state,
+            polymorphic_discriminator=self._polymorphic_discriminator
+        )
+
+        context.loaders.append((self._label_name, _instance))
+        # TODO: this needs to be in instance_processor()
+        # and needs a getter fn.   a special entry in
+        # populators should be used here
+        # if self._polymorphic_discriminator is not None and \
+        #    self._polymorphic_discriminator \
+        #        is not self.mapper.polymorphic_on:
+        #
+        #    if adapter:
+        #        pd = adapter.columns[self._polymorphic_discriminator]
+        #    else:
+        #        pd = self._polymorphic_discriminator
+        #    context.primary_columns.append(pd)
 
     def __str__(self):
         return str(self.mapper)
@@ -3708,12 +3747,14 @@ class QueryContext(object):
         self.refresh_state = query._refresh_state
         self.primary_columns = []
         self.secondary_columns = []
+        self.column_processors = {}
         self.eager_order_by = []
         self.eager_joins = {}
         self.create_eager_joins = []
         self.propagate_options = set(o for o in query._with_options if
                                      o.propagate_to_loaders)
         self.attributes = query._attributes.copy()
+        self.loaders = []
 
 
 class AliasOption(interfaces.MapperOption):

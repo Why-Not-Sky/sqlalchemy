@@ -116,13 +116,6 @@ class MapperProperty(_MappedAttribute, InspectionAttr, util.MemoizedSlots):
 
         """
 
-    def create_row_processor(self, context, path,
-                             mapper, result, adapter, populators):
-        """Produce row processing functions and append to the given
-        set of populators lists.
-
-        """
-
     def cascade_iterator(self, type_, state, visited_instances=None,
                          halt_on=None):
         """Iterate through instances related to the given instance for
@@ -496,18 +489,6 @@ class StrategizedProperty(MapperProperty):
             strat = self.strategy
         strat.setup_query(context, entity, path, loader, adapter, **kwargs)
 
-    def create_row_processor(
-            self, context, path, mapper,
-            result, adapter, populators):
-        loader = self._get_context_loader(context, path)
-        if loader and loader.strategy:
-            strat = self._get_strategy(loader.strategy)
-        else:
-            strat = self.strategy
-        strat.create_row_processor(
-            context, path, loader,
-            mapper, result, adapter, populators)
-
     def do_init(self):
         self._strategies = {}
         self.strategy = self._get_strategy_by_cls(self.strategy_class)
@@ -610,18 +591,6 @@ class LoaderStrategy(object):
         This method fulfills the contract specified by MapperProperty.setup().
 
         StrategizedProperty delegates its setup() method
-        directly to this method.
-
-        """
-
-    def create_row_processor(self, context, path, loadopt, mapper,
-                             result, adapter, populators):
-        """Establish row processing functions for a given QueryContext.
-
-        This method fulfills the contract specified by
-        MapperProperty.create_row_processor().
-
-        StrategizedProperty delegates its create_row_processor() method
         directly to this method.
 
         """

@@ -24,7 +24,7 @@ from .interfaces import (
 )
 from .session import _state_session
 import itertools
-
+import operator
 
 def _register_attribute(
     strategy, mapper, useobject,
@@ -139,11 +139,24 @@ class ColumnLoader(LoaderStrategy):
 
     def setup_query(
             self, context, entity, path, loadopt,
-            adapter, column_collection, **kwargs):
+            adapter, column_collection, populators, **kwargs):
         for c in self.columns:
             if adapter:
                 c = adapter.columns[c]
             column_collection.append(c)
+            # here, we can normally break out.  The exception is
+            # when the mapper needs to see a particular column here,
+            # which most often occurs when the mapper.primary_key
+            # attribute points a column other than the first one, e.g.
+            # the column on the base table.   More specific logic
+            # should be added here so that we need not bother
+            # querying out every column.
+
+        def quick_populate(index):
+            populators["quick"].append(
+                (self.key, operator.itemgetter(index))
+            )
+        context.column_processors[self.columns[0]] = quick_populate
 
     def init_class_attribute(self, mapper):
         self.is_class_level = True
@@ -158,21 +171,6 @@ class ColumnLoader(LoaderStrategy):
             compare_function=coltype.compare_values,
             active_history=active_history
         )
-
-    def create_row_processor(
-            self, context, path,
-            loadopt, mapper, result, adapter, populators):
-        # look through list of columns represented here
-        # to see which, if any, is present in the row.
-        for col in self.columns:
-            if adapter:
-                col = adapter.columns[col]
-            getter = result._getter(col)
-            if getter:
-                populators["quick"].append((self.key, getter))
-                break
-        else:
-            populators["expire"].append((self.key, True))
 
 
 @log.class_logger

@@ -43,14 +43,10 @@ def instances(query, cursor, context):
                 return tuple(fn(x) for x, fn in zip(row, filter_fns))
 
     try:
-        (process, labels) = \
-            list(zip(*[
-                query_entity.row_processor(query,
-                                           context, cursor)
-                for query_entity in query._entities
-            ]))
+        (labels, process) = list(zip(*context.loaders))
 
         if not single_entity:
+            # TODO: this should be in context, so it can also be cached.
             keyed_tuple = util.lightweight_named_tuple('result', labels)
 
         while True:
@@ -218,18 +214,26 @@ def load_on_ident(query, key,
         return None
 
 
-def instance_processor(mapper, context, result, path, adapter,
+def instance_processor(mapper, props_toload, context, column_collection,
+                       query_entity, path, adapter,
                        only_load_props=None, refresh_state=None,
                        polymorphic_discriminator=None,
                        _polymorphic_from=None):
     """Produce a mapper level row processor callable
        which processes rows into mapped instances."""
 
-    # note that this method, most of which exists in a closure
-    # called _instance(), resists being broken out, as
-    # attempts to do so tend to add significant function
-    # call overhead.  _instance() is the most
-    # performance-critical section in the whole ORM.
+    populators = collections.defaultdict(list)
+
+    for prop in props_toload:
+        prop.setup(
+            context,
+            query_entity,
+            path,
+            adapter,
+            only_load_props=only_load_props,
+            column_collection=column_collection,
+            populators=populators
+        )
 
     pk_cols = mapper.primary_key
 
@@ -238,15 +242,9 @@ def instance_processor(mapper, context, result, path, adapter,
 
     identity_class = mapper._identity_class
 
-    populators = collections.defaultdict(list)
-
     props = mapper._props.values()
     if only_load_props is not None:
         props = (p for p in props if p.key in only_load_props)
-
-    for prop in props:
-        prop.create_row_processor(
-            context, path, mapper, result, adapter, populators)
 
     propagate_options = context.propagate_options
     if propagate_options:
@@ -262,7 +260,6 @@ def instance_processor(mapper, context, result, path, adapter,
     instance_dict = attributes.instance_dict
     session_id = context.session.hash_key
     version_check = context.version_check
-    runid = context.runid
 
     if refresh_state:
         refresh_identity_key = refresh_state.key
@@ -288,7 +285,7 @@ def instance_processor(mapper, context, result, path, adapter,
             state = refresh_state
             instance = state.obj()
             dict_ = instance_dict(instance)
-            isnew = state.runid != runid
+            isnew = state.runid != context.runid
             currentload = True
             loaded_instance = False
         else:
@@ -306,7 +303,7 @@ def instance_processor(mapper, context, result, path, adapter,
                 state = instance_state(instance)
                 dict_ = instance_dict(instance)
 
-                isnew = state.runid != runid
+                isnew = state.runid != context.runid
                 currentload = not isnew
                 loaded_instance = False
 
@@ -388,12 +385,13 @@ def instance_processor(mapper, context, result, path, adapter,
 
         return instance
 
-    if not _polymorphic_from and not refresh_state:
+    # TODO: this has to be reworked (again)
+    # if not _polymorphic_from and not refresh_state:
         # if we are doing polymorphic, dispatch to a different _instance()
         # method specific to the subclass mapper
-        _instance = _decorate_polymorphic_switch(
-            _instance, context, mapper, result, path,
-            polymorphic_discriminator, adapter)
+    #    _instance = _decorate_polymorphic_switch(
+    #        _instance, context, mapper, path,
+    #        polymorphic_discriminator, adapter)
 
     return _instance
 
