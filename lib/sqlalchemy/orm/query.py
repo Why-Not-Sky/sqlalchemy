@@ -20,6 +20,7 @@ database to return iterable result sets.
 """
 
 from itertools import chain
+import operator
 
 from . import (
     attributes, interfaces, object_mapper, persistence,
@@ -3271,45 +3272,6 @@ class _MapperEntity(_QueryEntity):
 
         return ret
 
-    def row_processor(self, query, context, result):
-        adapter = self._get_entity_clauses(query, context)
-
-        if context.adapter and adapter:
-            adapter = adapter.wrap(context.adapter)
-        elif not adapter:
-            adapter = context.adapter
-
-        # polymorphic mappers which have concrete tables in
-        # their hierarchy usually
-        # require row aliasing unconditionally.
-        if not adapter and self.mapper._requires_row_aliasing:
-            adapter = sql_util.ColumnAdapter(
-                self.selectable,
-                self.mapper._equivalent_columns)
-
-        if query._primary_entity is self:
-            _instance = loading.instance_processor(
-                self.mapper,
-                context,
-                result,
-                self.path,
-                adapter,
-                only_load_props=query._only_load_props,
-                refresh_state=context.refresh_state,
-                polymorphic_discriminator=self._polymorphic_discriminator
-            )
-        else:
-            _instance = loading.instance_processor(
-                self.mapper,
-                context,
-                result,
-                self.path,
-                adapter,
-                polymorphic_discriminator=self._polymorphic_discriminator
-            )
-
-        return _instance, self._label_name
-
     def setup_context(self, query, context):
         adapter = self._get_entity_clauses(query, context)
 
@@ -3553,19 +3515,22 @@ class _BundleEntity(_QueryEntity):
         for ent in self._entities:
             ent.setup_entity(ext_info, aliased_adapter)
 
-    def setup_context(self, query, context):
-        for ent in self._entities:
-            ent.setup_context(query, context)
+    def setup_context(self, query, context, loaders=None):
 
-    def row_processor(self, query, context, result):
-        procs, labels = zip(
-            *[ent.row_processor(query, context, result)
-              for ent in self._entities]
+        our_loaders = []
+        for ent in self._entities:
+            ent.setup_context(query, context, loaders=our_loaders)
+
+        labels, procs = zip(
+            *our_loaders
         )
 
         proc = self.bundle.create_row_processor(query, procs, labels)
 
-        return proc, self._label_name
+        if loaders is not None:
+            loaders.append((self._label_name, proc))
+        else:
+            context.loaders.append((self._label_name, proc))
 
 
 class _ColumnEntity(_QueryEntity):
@@ -3698,24 +3663,32 @@ class _ColumnEntity(_QueryEntity):
     def _resolve_expr_against_query_aliases(self, query, expr, context):
         return query._adapt_clause(expr, False, True)
 
-    def row_processor(self, query, context, result):
-        column = self._resolve_expr_against_query_aliases(
-            query, self.column, context)
-
-        if context.adapter:
-            column = context.adapter.columns[column]
-
-        getter = result._getter(column)
-        return getter, self._label_name
-
-    def setup_context(self, query, context):
+    def setup_context(self, query, context, loaders=None):
         column = self._resolve_expr_against_query_aliases(
             query, self.column, context)
         context.froms += tuple(self.froms)
         context.primary_columns.append(column)
 
+        loader = _IdxLoader()
+        context.column_processors[column] = loader.setup
+
+        if loaders is not None:
+            loaders.append((self._label_name, loader))
+        else:
+            context.loaders.append((self._label_name, loader))
+
     def __str__(self):
         return str(self.column)
+
+
+class _IdxLoader(object):
+    __slots__ = ('getter',)
+
+    def setup(self, index):
+        self.getter = operator.itemgetter(index)
+
+    def __call__(self, row):
+        return self.getter(row)
 
 
 class QueryContext(object):
