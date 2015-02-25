@@ -1,5 +1,6 @@
 from . import _fixtures
-from sqlalchemy.orm import loading, Session, aliased
+from sqlalchemy import text
+from sqlalchemy.orm import loading, Session, aliased, Bundle
 from sqlalchemy.testing.assertions import eq_, assert_raises
 from sqlalchemy.util import KeyedTuple
 from sqlalchemy.testing import mock
@@ -33,6 +34,93 @@ class InstancesTest(_fixtures.FixtureTest):
             list, loading.instances(q, cursor, ctx)
         )
         assert cursor.close.called, "Cursor wasn't closed"
+
+    def test_query_load_entity(self):
+        User = self.classes.User
+        s = Session()
+
+        q = s.query(User).order_by(User.id)
+        rows = q.all()
+
+        eq_(
+            rows,
+            [
+                User(id=7, name='jack'),
+                User(id=8, name='ed'),
+                User(id=9, name='fred'),
+                User(id=10, name='chuck')
+            ]
+        )
+
+    def test_query_load_columns(self):
+        User = self.classes.User
+        s = Session()
+
+        q = s.query(User.id, User.name).order_by(User.id)
+        rows = q.all()
+
+        eq_(
+            rows,
+            [
+                (7, 'jack'),
+                (8, 'ed'),
+                (9, 'fred'),
+                (10, 'chuck')
+            ]
+        )
+
+    def test_query_load_bundles(self):
+        User = self.classes.User
+        s = Session()
+
+        q = s.query(Bundle('foo', User.id, User.name)).order_by(User.id)
+        rows = q.all()
+
+        eq_(
+            rows,
+            [
+                ((7, 'jack'),),
+                ((8, 'ed'),),
+                ((9, 'fred'),),
+                ((10, 'chuck'),)
+            ]
+        )
+
+    def test_query_load_entity_from_statement(self):
+        User = self.classes.User
+        s = Session()
+
+        q = s.query(User).from_statement(
+            text("select name, id from users order by id"))
+        rows = q.all()
+
+        eq_(
+            rows,
+            [
+                User(id=7, name='jack'),
+                User(id=8, name='ed'),
+                User(id=9, name='fred'),
+                User(id=10, name='chuck')
+            ]
+        )
+
+    def test_query_load_columns_from_statement(self):
+        User = self.classes.User
+        s = Session()
+
+        q = s.query(User.name, User.id).from_statement(
+            text("select name, id from users order by id"))
+        rows = q.all()
+
+        eq_(
+            rows,
+            [
+                ('jack', 7),
+                ('ed', 8),
+                ('fred', 9),
+                ('chuck', 10)
+            ]
+        )
 
 
 class MergeResultTest(_fixtures.FixtureTest):
