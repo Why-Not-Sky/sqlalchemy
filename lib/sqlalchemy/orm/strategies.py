@@ -119,11 +119,6 @@ class UninstrumentedColumnLoader(LoaderStrategy):
                 c = adapter.columns[c]
             column_collection.append(c)
 
-    def create_row_processor(
-            self, context, path, loadopt,
-            mapper, result, adapter, populators):
-        pass
-
 
 @log.class_logger
 @properties.ColumnProperty.strategy_for(instrument=True, deferred=False)
@@ -188,30 +183,6 @@ class DeferredColumnLoader(LoaderStrategy):
         self.columns = self.parent_property.columns
         self.group = self.parent_property.group
 
-    def create_row_processor(
-            self, context, path, loadopt,
-            mapper, result, adapter, populators):
-        col = self.columns[0]
-        if adapter:
-            col = adapter.columns[col]
-
-        # TODO: put a result-level contains here
-        getter = result._getter(col)
-        if getter:
-            self.parent_property._get_strategy_by_cls(ColumnLoader).\
-                create_row_processor(
-                    context, path, loadopt, mapper, result,
-                    adapter, populators)
-
-        elif not self.is_class_level:
-            set_deferred_for_local_state = \
-                InstanceState._instance_level_callable_processor(
-                    mapper.class_manager,
-                    LoadDeferredColumns(self.key), self.key)
-            populators["new"].append((self.key, set_deferred_for_local_state))
-        else:
-            populators["expire"].append((self.key, False))
-
     def init_class_attribute(self, mapper):
         self.is_class_level = True
 
@@ -224,7 +195,7 @@ class DeferredColumnLoader(LoaderStrategy):
 
     def setup_query(
             self, context, entity, path, loadopt, adapter,
-            only_load_props=None, **kwargs):
+            populators, only_load_props=None, **kwargs):
 
         if (
             (
@@ -246,7 +217,16 @@ class DeferredColumnLoader(LoaderStrategy):
         ):
             self.parent_property._get_strategy_by_cls(ColumnLoader).\
                 setup_query(context, entity,
-                            path, loadopt, adapter, **kwargs)
+                            path, loadopt, adapter,
+                            populators=populators, **kwargs)
+        elif not self.is_class_level:
+            set_deferred_for_local_state = \
+                InstanceState._instance_level_callable_processor(
+                    self.parent.class_manager,
+                    LoadDeferredColumns(self.key), self.key)
+            populators["new"].append((self.key, set_deferred_for_local_state))
+        else:
+            populators["expire"].append((self.key, False))
 
     def _load_for_state(self, state, passive):
         if not state.key:
