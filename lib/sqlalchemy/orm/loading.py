@@ -16,6 +16,7 @@ from __future__ import absolute_import
 
 from .. import util
 from . import attributes, exc as orm_exc
+from .base import _IdxLoader
 from ..sql import util as sql_util
 from .util import _none_set, state_str
 from .. import exc as sa_exc
@@ -248,6 +249,12 @@ def instance_processor(mapper, props_toload, context, column_collection,
     if adapter:
         pk_cols = [adapter.columns[c] for c in pk_cols]
 
+    pk_getters = [_IdxLoader()] * len(pk_cols)
+    context.column_processors.extend(
+        (pk_col, pk_getter.setup)
+        for pk_col, pk_getter in zip(pk_cols, pk_getters)
+    )
+
     identity_class = mapper._identity_class
 
     props = mapper._props.values()
@@ -301,7 +308,7 @@ def instance_processor(mapper, props_toload, context, column_collection,
             # session, or we have to create a new one
             identitykey = (
                 identity_class,
-                tuple([row[column] for column in pk_cols])
+                tuple(getter(row) for getter in pk_getters)
             )
 
             instance = session_identity_map.get(identitykey)

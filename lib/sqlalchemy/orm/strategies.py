@@ -151,7 +151,7 @@ class ColumnLoader(LoaderStrategy):
             populators["quick"].append(
                 (self.key, operator.itemgetter(index))
             )
-        context.column_processors[self.columns[0]] = quick_populate
+        context.column_processors.append((self.columns[0], quick_populate))
 
     def init_class_attribute(self, mapper):
         self.is_class_level = True

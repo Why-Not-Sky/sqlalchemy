@@ -20,14 +20,13 @@ database to return iterable result sets.
 """
 
 from itertools import chain
-import operator
 
 from . import (
     attributes, interfaces, object_mapper, persistence,
     exc as orm_exc, loading
 )
 from .base import _entity_descriptor, _is_aliased_class, \
-    _is_mapped_class, _orm_columns, _generative
+    _is_mapped_class, _orm_columns, _generative, _IdxLoader
 from .path_registry import PathRegistry
 from .util import (
     AliasedClass, ORMAdapter, join as orm_join, with_parent, aliased
@@ -3092,9 +3091,11 @@ class Query(object):
 
         # initiate indexes for column processor functions
         # that have been established
-        for idx, col in enumerate(
-                context.primary_columns + context.secondary_columns):
-            context.column_processors[col](idx)
+        context._setup_column_processors(
+            enumerate(
+                context.primary_columns + context.secondary_columns
+            )
+        )
 
         return statement
 
@@ -3672,7 +3673,7 @@ class _ColumnEntity(_QueryEntity):
         context.primary_columns.append(column)
 
         loader = _IdxLoader()
-        context.column_processors[column] = loader.setup
+        context.column_processors.append((column, loader.setup))
 
         if loaders is not None:
             loaders.append((self._label_name, loader))
@@ -3681,16 +3682,6 @@ class _ColumnEntity(_QueryEntity):
 
     def __str__(self):
         return str(self.column)
-
-
-class _IdxLoader(object):
-    __slots__ = ('getter',)
-
-    def setup(self, index):
-        self.getter = operator.itemgetter(index)
-
-    def __call__(self, row):
-        return self.getter(row)
 
 
 class QueryContext(object):
@@ -3723,7 +3714,7 @@ class QueryContext(object):
         self.refresh_state = query._refresh_state
         self.primary_columns = []
         self.secondary_columns = []
-        self.column_processors = {}
+        self.column_processors = []
         self.eager_order_by = []
         self.eager_joins = {}
         self.create_eager_joins = []
@@ -3733,8 +3724,11 @@ class QueryContext(object):
         self.loaders = []
 
     def _setup_column_processors(self, cols):
-        for idx, col in cols:
-            self.column_processors[col](idx)
+        d = dict(
+            (col, idx) for idx, col in cols
+        )
+        for col, fn in self.column_processors:
+            fn(d[col])
 
 
 class AliasOption(interfaces.MapperOption):

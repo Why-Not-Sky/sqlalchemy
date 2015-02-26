@@ -351,6 +351,13 @@ def _is_aliased_class(entity):
         getattr(insp, "is_aliased_class", False)
 
 
+class _IdxLoader(object):
+    __slots__ = ('__call__',)
+
+    def setup(self, index):
+        self.__call__ = operator.itemgetter(index)
+
+
 def _entity_descriptor(entity, key):
     """Return a class attribute given an entity and string name.
 
