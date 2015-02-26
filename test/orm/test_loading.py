@@ -1,4 +1,5 @@
 from . import _fixtures
+from .inheritance import _poly_fixtures
 from sqlalchemy import text
 from sqlalchemy.orm import loading, Session, aliased, Bundle
 from sqlalchemy.testing.assertions import eq_, assert_raises
@@ -119,6 +120,29 @@ class InstancesTest(_fixtures.FixtureTest):
                 ('ed', 8),
                 ('fred', 9),
                 ('chuck', 10)
+            ]
+        )
+
+
+class PolymorphicInstancesTest(_poly_fixtures._Polymorphic):
+    def test_query_load_entity(self):
+        Person, Engineer, Manager, Boss = (
+            _poly_fixtures.Person, _poly_fixtures.Engineer,
+            _poly_fixtures.Manager, _poly_fixtures.Boss)
+
+        s = Session()
+
+        q = s.query(Person).order_by(Person.person_id)
+        rows = q.all()
+
+        eq_(
+            rows,
+            [
+                Engineer(name='dilbert'),
+                Engineer(name='wally'),
+                Boss(name='pointy haired boss', golf_swing='fore!'),
+                Manager(manager_name='dogbert'),
+                Engineer(name='vlad')
             ]
         )
 

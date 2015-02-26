@@ -227,33 +227,57 @@ def instance_processor(mapper, props_toload, context, column_collection,
                        query_entity, path, adapter,
                        only_load_props=None, refresh_state=None,
                        polymorphic_discriminator=None,
-                       _polymorphic_from=None):
+                       _polymorphic_from=None,
+                       _polymorphic_pk_getters=None,
+                       _polymorphic_from_populators=None):
     """Produce a mapper level row processor callable
        which processes rows into mapped instances."""
 
-    populators = collections.defaultdict(list)
+    load_is_polymorphic = mapper.polymorphic_on is not None
 
-    for prop in props_toload:
-        prop.setup(
-            context,
-            query_entity,
-            path,
-            adapter,
-            only_load_props=only_load_props,
-            column_collection=column_collection,
-            populators=populators
+    if _polymorphic_from_populators is not None:
+        # if we are a subclass loader, then we use the collection
+        # of populators that were already set up for us.
+
+        populators = _polymorphic_from_populators
+    else:
+        populators = collections.defaultdict(list)
+
+        if load_is_polymorphic:
+            per_mapper_populators = collections.defaultdict(
+                lambda: collections.defaultdict(list))
+            per_mapper_populators[mapper] = populators
+
+        # establish all columns and column loaders up front
+        # across subclass mappers as well.   Categorize loaders
+        # into mapper-specific buckets.
+
+        for prop in props_toload:
+            prop.setup(
+                context,
+                query_entity,
+                path,
+                adapter,
+                only_load_props=only_load_props,
+                column_collection=column_collection,
+                populators=per_mapper_populators[prop.parent]
+                if load_is_polymorphic
+                else populators
+            )
+
+    if _polymorphic_pk_getters:
+        pk_getters = _polymorphic_pk_getters
+    else:
+        pk_cols = mapper.primary_key
+
+        if adapter:
+            pk_cols = [adapter.columns[c] for c in pk_cols]
+
+        pk_getters = [_IdxLoader()] * len(pk_cols)
+        context.column_processors.extend(
+            (pk_col, pk_getter.setup)
+            for pk_col, pk_getter in zip(pk_cols, pk_getters)
         )
-
-    pk_cols = mapper.primary_key
-
-    if adapter:
-        pk_cols = [adapter.columns[c] for c in pk_cols]
-
-    pk_getters = [_IdxLoader()] * len(pk_cols)
-    context.column_processors.extend(
-        (pk_col, pk_getter.setup)
-        for pk_col, pk_getter in zip(pk_cols, pk_getters)
-    )
 
     identity_class = mapper._identity_class
 
@@ -400,13 +424,12 @@ def instance_processor(mapper, props_toload, context, column_collection,
 
         return instance
 
-    # TODO: this has to be reworked (again)
-    # if not _polymorphic_from and not refresh_state:
+    if load_is_polymorphic and not _polymorphic_from and not refresh_state:
         # if we are doing polymorphic, dispatch to a different _instance()
         # method specific to the subclass mapper
-    #    _instance = _decorate_polymorphic_switch(
-    #        _instance, context, mapper, path,
-    #        polymorphic_discriminator, adapter)
+        _instance = _decorate_polymorphic_switch(
+            _instance, context, mapper, per_mapper_populators, path,
+            polymorphic_discriminator, adapter, pk_getters)
 
     return _instance
 
@@ -493,8 +516,9 @@ def _validate_version_id(mapper, state, dict_, row, adapter):
 
 
 def _decorate_polymorphic_switch(
-        instance_fn, context, mapper, result, path,
-        polymorphic_discriminator, adapter):
+        instance_fn, context, mapper, per_mapper_populators, path,
+        polymorphic_discriminator, adapter, pk_getters):
+
     if polymorphic_discriminator is not None:
         polymorphic_on = polymorphic_discriminator
     else:
@@ -504,6 +528,12 @@ def _decorate_polymorphic_switch(
 
     if adapter:
         polymorphic_on = adapter.columns[polymorphic_on]
+
+    polymorphic_getter = _IdxLoader()
+    if polymorphic_discriminator is not mapper.polymorphic_on:
+        context.primary_columns.append(polymorphic_on)
+    context.column_processors.append(
+        (polymorphic_on, polymorphic_getter.setup))
 
     def configure_subclass_mapper(discriminator):
         try:
@@ -516,16 +546,45 @@ def _decorate_polymorphic_switch(
             if sub_mapper is mapper:
                 return None
 
+            populators = collections.defaultdict(list)
+            for super_mapper in sub_mapper.iterate_to_root():
+                mapper_populators = per_mapper_populators[super_mapper]
+                for k, collection in mapper_populators.items():
+                    populators[k].extend(collection)
+                if super_mapper is mapper:
+                    break
+
+            # TODO!
+            # big problems:
+            # 1. "quick" is being multiply populated with redundant
+            # populators
+            # 2. columns like "golf_swing", which are not rendered in
+            # setup(), therefore have no populator at all, we normally
+            # are expecting an "expire" populator to set up for a deferred
+            # load.   We need to either make it so these populators aren't
+            # needed or
+            # that we in here do actually add more non-column populators,
+            # which may mean that we need some version of
+            # row_processor() again for this case.   It would be
+            # along the lines of missing_attribute_populator() and would be
+            # specific to those cases where we have to produce a subclass
+            # against a query that did not specify this class in its
+            # entities.
+            # if discriminator == 'boss':
+            #    import pdb
+            #    pdb.set_trace()
             return instance_processor(
-                sub_mapper, context, result,
-                path, adapter, _polymorphic_from=mapper)
+                sub_mapper, None, context, None, None,
+                path, adapter, _polymorphic_from=mapper,
+                _polymorphic_pk_getters=pk_getters,
+                _polymorphic_from_populators=populators)
 
     polymorphic_instances = util.PopulateDict(
         configure_subclass_mapper
     )
 
     def polymorphic_instance(row):
-        discriminator = row[polymorphic_on]
+        discriminator = polymorphic_getter(row)
         if discriminator is not None:
             _instance = polymorphic_instances[discriminator]
             if _instance:
