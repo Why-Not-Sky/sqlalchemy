@@ -18,7 +18,9 @@ ORM session, whereas the ``Select`` construct interacts directly with the
 database to return iterable result sets.
 
 """
+from __future__ import absolute_import
 
+import collections
 from itertools import chain
 
 from . import (
@@ -2942,6 +2944,7 @@ class Query(object):
             entity.setup_context(self, context)
 
         if context.statement is not None:
+            context._predefined_statement = True
             return context
 
         for rec in context.create_eager_joins:
@@ -3044,6 +3047,13 @@ class Query(object):
         statement.append_order_by(*context.eager_order_by)
 
         context._setup_column_processors(
+            enumerate(
+                col for (label, col) in statement._columns_plus_names
+            ),
+            outer_adapter
+        )
+
+        context._setup_column_processors(
             enumerate(context.primary_columns, 0)
         )
         context._setup_column_processors(
@@ -3093,7 +3103,7 @@ class Query(object):
         # that have been established
         context._setup_column_processors(
             enumerate(
-                context.primary_columns + context.secondary_columns
+                col for (label, col) in statement._columns_plus_names
             )
         )
 
@@ -3317,7 +3327,7 @@ class _MapperEntity(_QueryEntity):
         else:
             only_load_props = refresh_state = None
 
-        _instance = loading.instance_processor(
+        _instance = loading._instance_processor(
             self.mapper,
             props_toload,
             context,
@@ -3331,18 +3341,6 @@ class _MapperEntity(_QueryEntity):
         )
 
         context.loaders.append((self._label_name, _instance))
-        # TODO: this needs to be in instance_processor()
-        # and needs a getter fn.   a special entry in
-        # populators should be used here
-        # if self._polymorphic_discriminator is not None and \
-        #    self._polymorphic_discriminator \
-        #        is not self.mapper.polymorphic_on:
-        #
-        #    if adapter:
-        #        pd = adapter.columns[self._polymorphic_discriminator]
-        #    else:
-        #        pd = self._polymorphic_discriminator
-        #    context.primary_columns.append(pd)
 
     def __str__(self):
         return str(self.mapper)
@@ -3690,6 +3688,7 @@ class QueryContext(object):
     froms = ()
     for_update = None
     order_by = False
+    _predefined_statement = False
 
     def __init__(self, query):
 
@@ -3723,11 +3722,14 @@ class QueryContext(object):
         self.attributes = query._attributes.copy()
         self.loaders = []
 
-    def _setup_column_processors(self, cols):
-        d = dict(
-            (col, idx) for idx, col in cols
+    def _setup_column_processors(self, cols, adapter=None):
+        d = collections.defaultdict(
+            lambda: -1,
+            [(col, idx) for idx, col in cols]
         )
         for col, fn in self.column_processors:
+            if adapter:
+                col = adapter.columns[col]
             fn(d[col])
 
 

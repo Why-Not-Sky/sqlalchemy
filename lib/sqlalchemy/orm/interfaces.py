@@ -107,12 +107,25 @@ class MapperProperty(_MappedAttribute, InspectionAttr, util.MemoizedSlots):
         """
         return {}
 
-    def setup(self, context, entity, path, adapter, **kwargs):
+    def setup(
+            self, context, query_entity, path, mapper,
+            adapter, column_collection, populators, **kw):
         """Called by Query for the purposes of constructing a SQL statement.
 
         Each MapperProperty associated with the target mapper processes the
         statement referenced by the query context, adding columns and/or
         criterion as appropriate.
+
+        """
+
+    def setup_for_missing_attribute(
+            self, context, query_entity, path, mapper, populators, **kw):
+        """Setup a strategy for a Query where this property was not yet
+        included.
+
+        This function can do everything that setup() does, *except* attempt
+        to modify the SQL query; the method may be called after the query
+        has already been emitted and results are being received.
 
         """
 
@@ -481,13 +494,31 @@ class StrategizedProperty(MapperProperty):
     def _get_strategy_by_cls(self, cls):
         return self._get_strategy(cls._strategy_keys[0])
 
-    def setup(self, context, entity, path, adapter, **kwargs):
-        loader = self._get_context_loader(context, path)
-        if loader and loader.strategy:
-            strat = self._get_strategy(loader.strategy)
+    def setup(
+            self, context, query_entity, path, mapper,
+            adapter, column_collection, populators, **kw):
+
+        loadopt = self._get_context_loader(context, path)
+        if loadopt and loadopt.strategy:
+            strat = self._get_strategy(loadopt.strategy)
         else:
             strat = self.strategy
-        strat.setup_query(context, entity, path, loader, adapter, **kwargs)
+
+        strat.setup_query(
+            context, query_entity, path, mapper,
+            adapter, column_collection, populators, loadopt, **kw)
+
+    def setup_for_missing_attribute(
+            self, context, query_entity, path, mapper,
+            populators, **kw):
+
+        loadopt = self._get_context_loader(context, path)
+        if loadopt and loadopt.strategy:
+            strat = self._get_strategy(loadopt.strategy)
+        else:
+            strat = self.strategy
+        strat.setup_for_missing_attribute(
+            context, query_entity, path, mapper, populators, loadopt, **kw)
 
     def do_init(self):
         self._strategies = {}
@@ -585,7 +616,9 @@ class LoaderStrategy(object):
     def init_class_attribute(self, mapper):
         pass
 
-    def setup_query(self, context, entity, path, loadopt, adapter, **kwargs):
+    def setup_query(
+            self, context, query_entity, path, mapper,
+            adapter, column_collection, populators, loadopt, **kw):
         """Establish column and other state for a given QueryContext.
 
         This method fulfills the contract specified by MapperProperty.setup().
@@ -593,6 +626,15 @@ class LoaderStrategy(object):
         StrategizedProperty delegates its setup() method
         directly to this method.
 
+        """
+
+    def setup_for_missing_attribute(
+            self, context, query_entity, path, mapper,
+            populators, loadopt, **kw):
+        """Establish loader behavior for an attribute that's not accommodated
+        by the query.
+
+        This is used for polymorphic loading when a subclass load is detected.
         """
 
     def __str__(self):

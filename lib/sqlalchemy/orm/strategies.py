@@ -26,6 +26,7 @@ from .session import _state_session
 import itertools
 import operator
 
+
 def _register_attribute(
     strategy, mapper, useobject,
     compare_function=None,
@@ -112,8 +113,8 @@ class UninstrumentedColumnLoader(LoaderStrategy):
         self.columns = self.parent_property.columns
 
     def setup_query(
-            self, context, entity, path, loadopt, adapter,
-            column_collection=None, **kwargs):
+            self, context, query_entity, path, mapper,
+            adapter, column_collection, populators, loadopt, **kw):
         for c in self.columns:
             if adapter:
                 c = adapter.columns[c]
@@ -133,8 +134,8 @@ class ColumnLoader(LoaderStrategy):
         self.is_composite = hasattr(self.parent_property, 'composite_class')
 
     def setup_query(
-            self, context, entity, path, loadopt,
-            adapter, column_collection, populators, **kwargs):
+            self, context, query_entity, path, mapper,
+            adapter, column_collection, populators, loadopt, **kw):
         for c in self.columns:
             if adapter:
                 c = adapter.columns[c]
@@ -148,10 +149,18 @@ class ColumnLoader(LoaderStrategy):
             # querying out every column.
 
         def quick_populate(index):
-            populators["quick"].append(
-                (self.key, operator.itemgetter(index))
-            )
+            if index == -1:
+                populators["expire"].append((self.key, True))
+            else:
+                populators["quick"].append(
+                    (self.key, operator.itemgetter(index))
+                )
         context.column_processors.append((self.columns[0], quick_populate))
+
+    def setup_for_missing_attribute(
+            self, context, query_entity, path, mapper,
+            populators, loadopt, **kw):
+        populators["expire"].append((self.key, True))
 
     def init_class_attribute(self, mapper):
         self.is_class_level = True
@@ -194,8 +203,9 @@ class DeferredColumnLoader(LoaderStrategy):
         )
 
     def setup_query(
-            self, context, entity, path, loadopt, adapter,
-            populators, only_load_props=None, **kwargs):
+            self, context, query_entity, path, mapper,
+            adapter, column_collection, populators, loadopt,
+            only_load_props=None, **kw):
 
         if (
             (
@@ -216,10 +226,19 @@ class DeferredColumnLoader(LoaderStrategy):
             )
         ):
             self.parent_property._get_strategy_by_cls(ColumnLoader).\
-                setup_query(context, entity,
-                            path, loadopt, adapter,
-                            populators=populators, **kwargs)
-        elif not self.is_class_level:
+                setup_query(
+                    context, query_entity,
+                    path, mapper, adapter,
+                    populators, loadopt, **kw)
+        else:
+            self.setup_for_missing_attribute(
+                context, query_entity, path, mapper, populators, loadopt, **kw
+            )
+
+    def setup_for_missing_attribute(
+            self, context, query_entity, path, mapper, populators,
+            loadopt, **kw):
+        if not self.is_class_level:
             set_deferred_for_local_state = \
                 InstanceState._instance_level_callable_processor(
                     self.parent.class_manager,
@@ -1432,7 +1451,7 @@ class JoinedLoader(AbstractRelationshipLoader):
         if eager_adapter is not False:
             key = self.key
 
-            _instance = loading.instance_processor(
+            _instance = loading._instance_processor(
                 self.mapper,
                 context,
                 result,

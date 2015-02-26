@@ -124,7 +124,7 @@ class InstancesTest(_fixtures.FixtureTest):
         )
 
 
-class PolymorphicInstancesTest(_poly_fixtures._Polymorphic):
+class _PolymorphicInstancesTest(_poly_fixtures._PolymorphicFixtureBase):
     def test_query_load_entity(self):
         Person, Engineer, Manager, Boss = (
             _poly_fixtures.Person, _poly_fixtures.Engineer,
@@ -138,13 +138,37 @@ class PolymorphicInstancesTest(_poly_fixtures._Polymorphic):
         eq_(
             rows,
             [
-                Engineer(name='dilbert'),
-                Engineer(name='wally'),
-                Boss(name='pointy haired boss', golf_swing='fore!'),
-                Manager(manager_name='dogbert'),
-                Engineer(name='vlad')
+                Engineer(
+                    name='dilbert', primary_language='java',
+                    status='regular engineer'),
+                Engineer(
+                    name='wally', primary_language='c++',
+                    status='regular engineer'),
+                Boss(
+                    name='pointy haired boss', golf_swing='fore',
+                    manager_name='pointy', status='da boss'),
+                Manager(
+                    name='dogbert', manager_name='dogbert',
+                    status='regular manager'),
+                Engineer(
+                    name='vlad', primary_language='cobol',
+                    status='elbonian engineer')
             ]
         )
+
+
+class PolymorphicInstancesDeferredTest(
+        _poly_fixtures._Polymorphic, _PolymorphicInstancesTest):
+    """test polymorphic loading with missing attributes on subclasses.
+
+    """
+
+
+class PolymorphicInstancesPolymorphicTest(
+        _poly_fixtures._PolymorphicPolymorphic, _PolymorphicInstancesTest):
+    """test polymorphic loading with all attributes in the query.
+
+    """
 
 
 class MergeResultTest(_fixtures.FixtureTest):

@@ -43,7 +43,10 @@ def instances(query, cursor, context):
             def filter_fn(row):
                 return tuple(fn(x) for x, fn in zip(row, filter_fns))
 
-    if context.statement is not None:
+    if context._predefined_statement:
+        # if the Query didn't actually build the statement,
+        # we use the result set to determine where the columns
+        # we're looking for are located.
         context._setup_column_processors(
             [
                 (cursor._index_of(col), col)
@@ -223,13 +226,14 @@ def load_on_ident(query, key,
         return None
 
 
-def instance_processor(mapper, props_toload, context, column_collection,
-                       query_entity, path, adapter,
-                       only_load_props=None, refresh_state=None,
-                       polymorphic_discriminator=None,
-                       _polymorphic_from=None,
-                       _polymorphic_pk_getters=None,
-                       _polymorphic_from_populators=None):
+def _instance_processor(
+    mapper, props_toload, context, column_collection,
+    query_entity, path, adapter,
+    only_load_props=None, refresh_state=None,
+    polymorphic_discriminator=None,
+        _polymorphic_from=None,
+        _polymorphic_pk_getters=None,
+        _polymorphic_from_populators=None):
     """Produce a mapper level row processor callable
        which processes rows into mapped instances."""
 
@@ -240,6 +244,13 @@ def instance_processor(mapper, props_toload, context, column_collection,
         # of populators that were already set up for us.
 
         populators = _polymorphic_from_populators
+
+        for prop in props_toload:
+            prop.setup_for_missing_attribute(
+                context, query_entity, path, mapper,
+                _polymorphic_from_populators
+            )
+
     else:
         populators = collections.defaultdict(list)
 
@@ -257,12 +268,13 @@ def instance_processor(mapper, props_toload, context, column_collection,
                 context,
                 query_entity,
                 path,
+                mapper,
                 adapter,
-                only_load_props=only_load_props,
-                column_collection=column_collection,
+                column_collection,
                 populators=per_mapper_populators[prop.parent]
-                if load_is_polymorphic
-                else populators
+                if load_is_polymorphic and not mapper.isa(prop.parent)
+                else populators,
+                only_load_props=only_load_props,
             )
 
     if _polymorphic_pk_getters:
@@ -428,7 +440,8 @@ def instance_processor(mapper, props_toload, context, column_collection,
         # if we are doing polymorphic, dispatch to a different _instance()
         # method specific to the subclass mapper
         _instance = _decorate_polymorphic_switch(
-            _instance, context, mapper, per_mapper_populators, path,
+            _instance, context, mapper, props_toload,
+            per_mapper_populators, path,
             polymorphic_discriminator, adapter, pk_getters)
 
     return _instance
@@ -516,7 +529,8 @@ def _validate_version_id(mapper, state, dict_, row, adapter):
 
 
 def _decorate_polymorphic_switch(
-        instance_fn, context, mapper, per_mapper_populators, path,
+        instance_fn, context, mapper, props_toload,
+        per_mapper_populators, path,
         polymorphic_discriminator, adapter, pk_getters):
 
     if polymorphic_discriminator is not None:
@@ -534,6 +548,8 @@ def _decorate_polymorphic_switch(
         context.primary_columns.append(polymorphic_on)
     context.column_processors.append(
         (polymorphic_on, polymorphic_getter.setup))
+
+    props_setup = set(props_toload)
 
     def configure_subclass_mapper(discriminator):
         try:
@@ -554,27 +570,18 @@ def _decorate_polymorphic_switch(
                 if super_mapper is mapper:
                     break
 
-            # TODO!
-            # big problems:
-            # 1. "quick" is being multiply populated with redundant
-            # populators
-            # 2. columns like "golf_swing", which are not rendered in
-            # setup(), therefore have no populator at all, we normally
-            # are expecting an "expire" populator to set up for a deferred
-            # load.   We need to either make it so these populators aren't
-            # needed or
-            # that we in here do actually add more non-column populators,
-            # which may mean that we need some version of
-            # row_processor() again for this case.   It would be
-            # along the lines of missing_attribute_populator() and would be
-            # specific to those cases where we have to produce a subclass
-            # against a query that did not specify this class in its
-            # entities.
-            # if discriminator == 'boss':
-            #    import pdb
-            #    pdb.set_trace()
-            return instance_processor(
-                sub_mapper, None, context, None, None,
+            keys_setup = set(p.key for p in props_setup)
+
+            props_needed = set(
+                prop for prop in sub_mapper._props.values()
+            ).difference(props_setup)
+
+            props_needed = props_needed.difference(
+                p for p in props_needed if p.key in keys_setup
+            )
+
+            return _instance_processor(
+                sub_mapper, props_needed, context, None, None,
                 path, adapter, _polymorphic_from=mapper,
                 _polymorphic_pk_getters=pk_getters,
                 _polymorphic_from_populators=populators)
